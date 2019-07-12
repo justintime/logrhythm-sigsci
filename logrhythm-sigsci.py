@@ -17,15 +17,13 @@ class BaseLog(object):
     def __init__(self, config, log_path):
         self.config    = config
         self.events    = []
+        self.token     = config['token']
         self.corp_name = config['corp_name']
         self.site      = config['site']
         self.api_host  = config['api_host']
-        self.headers   = {
-            'Content-type': 'application/json',
-            'Authorization': 'Bearer %s' % config['token']
-        }
 
         # We need to give SigSci 5 minutes to ingest, aggregate, and process
+        # https://docs.signalsciences.net/developer/extract-your-data/#example-usage
         until_time = datetime.utcnow().replace(second=0, microsecond=0)
         until_time = until_time - timedelta(minutes=5)
         self.until_time = calendar.timegm(until_time.utctimetuple())
@@ -48,6 +46,12 @@ class BaseLog(object):
         self.logger = logger
 
     def get_events(self):
+        # Once we've authenticated, we get a token.  That token needs to be sent in the request headers.
+        self.headers   = {
+            'Content-type': 'application/json',
+            'Authorization': 'Bearer %s' % self.token 
+        }
+
         try:
             self.fetch_events()
         except RuntimeError as e:
@@ -83,16 +87,19 @@ class RequestLog(BaseLog):
 
     def fetch_events(self):
         # Note that the API limits the until time to a max of 5 minutes ago
+        # https://docs.signalsciences.net/developer/extract-your-data/#example-usage
         self.url = self.api_host + ('/api/v0/corps/%s/sites/%s/feed/requests?from=%s&until=%s' % (self.corp_name, self.site, self.from_time, self.until_time))
 
         self.events = []
         url = self.url
         while True:
+            # SigSci paginates by 1,000 requests.  If there's a next uri parameter, keep fetching that until we're done
             response_raw = requests.get(url, headers=self.headers)
             if response_raw.status_code != 200:
                 print ('Unexpected status: %s response %s' % (response_raw.status_code, response_raw.text))
                 sys.exit(1)
             response = json.loads(response_raw.text)
+            # Add the requests to our events array
             self.events.extend(response['data'])
 
             next_url = response['next']['uri']
@@ -126,6 +133,7 @@ class RequestLog(BaseLog):
                 tags.append(tag['type'])
             
             event['tags'] = ','.join(tags)
+            # Write our event to the log
             self.logger.info(fmtstr % event)
         
 
