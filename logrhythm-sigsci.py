@@ -11,16 +11,19 @@ import calendar
 import requests
 from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timedelta
+from collections import deque
 
 class BaseLog(object):
 
     def __init__(self, config, log_path):
         self.config    = config
-        self.events    = []
+        self.events    = deque()
+        self.url       = False
         self.token     = config['token']
         self.corp_name = config['corp_name']
         self.site      = config['site']
         self.api_host  = config['api_host']
+        self.log_count = 0
 
         # We need to give SigSci 5 minutes to ingest, aggregate, and process
         # https://docs.signalsciences.net/developer/extract-your-data/#example-usage
@@ -53,7 +56,13 @@ class BaseLog(object):
         }
 
         try:
-            self.fetch_events()
+            # TODO: for memory reasons, we should write out each page to the log, and reset the events array with each page
+            # SigSci paginates by 1,000 requests.  If there's a next uri parameter, keep fetching that until we're done
+            self.fetch_done = False
+            while not self.fetch_done:
+                self.fetch_events()
+                self.write_logs()
+
         except RuntimeError as e:
             errmsg = e.args[0]
             if errmsg == 'Received 429 Too Many Requests':
@@ -74,8 +83,8 @@ class BaseLog(object):
             Determine the from_time based on the timestamp of the last event.
             To avoid duplicate logs, we set the from time to the next minute and zero seconds
         """
-        if self.events:
-            last_timestamp = self.events[-1]['timestamp'] 
+        if self.last_event:
+            last_timestamp = self.last_event['timestamp'] 
             from_time = (datetime.strptime(last_timestamp[:-1],"%Y-%m-%dT%H:%M:%S").replace(second=0, microsecond=0)) + timedelta(minutes=1)
             self.from_time = calendar.timegm(from_time.utctimetuple())
 
@@ -88,24 +97,22 @@ class RequestLog(BaseLog):
     def fetch_events(self):
         # Note that the API limits the until time to a max of 5 minutes ago
         # https://docs.signalsciences.net/developer/extract-your-data/#example-usage
-        self.url = self.api_host + ('/api/v0/corps/%s/sites/%s/feed/requests?from=%s&until=%s' % (self.corp_name, self.site, self.from_time, self.until_time))
+        if not self.url:
+            self.url = self.api_host + ('/api/v0/corps/%s/sites/%s/feed/requests?from=%s&until=%s' % (self.corp_name, self.site, self.from_time, self.until_time))
 
-        self.events = []
-        url = self.url
-        while True:
-            # SigSci paginates by 1,000 requests.  If there's a next uri parameter, keep fetching that until we're done
-            response_raw = requests.get(url, headers=self.headers)
-            if response_raw.status_code != 200:
-                print ('Unexpected status: %s response %s' % (response_raw.status_code, response_raw.text))
-                sys.exit(1)
-            response = json.loads(response_raw.text)
-            # Add the requests to our events array
-            self.events.extend(response['data'])
+        print ('Fetching requests from URL: \'' + self.url +'\'')
+        response_raw = requests.get(self.url, headers=self.headers)
+        if response_raw.status_code != 200:
+            print ('Unexpected status: %s response %s' % (response_raw.status_code, response_raw.text))
+            sys.exit(1)
+        response = json.loads(response_raw.text)
+        # Add the requests to our events array
+        self.events.extend(response['data'])
 
-            next_url = response['next']['uri']
-            if next_url == '':
-                break
-            url = self.api_host + next_url
+        if response['next']['uri'] == '':
+            self.fetch_done = True
+        else:
+            self.url = self.api_host + response['next']['uri']
 
     def write_logs(self):
         fmtstr = (
@@ -126,7 +133,13 @@ class RequestLog(BaseLog):
             'tags="%(tags)s",'
             'userAgent="%(userAgent)s"'
         )
-        for event in self.events:
+        event = None
+        while True:
+            try:
+                event = self.events.popleft()
+            except IndexError:
+                break
+                    
             # Grab our tag names and add them to an array
             tags = []
             for tag in event['tags']:
@@ -135,7 +148,9 @@ class RequestLog(BaseLog):
             event['tags'] = ','.join(tags)
             # Write our event to the log
             self.logger.info(fmtstr % event)
-        
+            self.log_count += 1
+        # Save our last event so we can convert the timestamp
+        self.last_event = event
 
 def load_config(config_path):
     """
@@ -234,9 +249,7 @@ def main():
             log.set_from_time(from_time)
             # Fetch the events
             log.get_events()
-            if args.verbose: print("Recieved " + str(len(log.events)) + " logs from the " + log.__class__.__name__)
-            # Format the events and write them to the logs
-            log.write_logs()
+            if args.verbose: print("Wrote " + str(log.log_count) + " logs from site %{site} of type " + log.__class__.__name__)
             # Update our last recorded timestamp
             state[state_index]['last_timestamp'] = log.update_from_time()
 
