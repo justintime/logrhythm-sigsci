@@ -100,11 +100,16 @@ class RequestLog(BaseLog):
         if not self.url:
             self.url = self.api_host + ('/api/v0/corps/%s/sites/%s/feed/requests?from=%s&until=%s' % (self.corp_name, self.site, self.from_time, self.until_time))
 
-        # print ('Fetching requests from URL: \'' + self.url +'\'')
+        if self.from_time == self.until_time:
+            print ('Do not run this script multiple times per minute.')
+            self.fetch_done = True
+            return False
+
         response_raw = requests.get(self.url, headers=self.headers)
         if response_raw.status_code != 200:
             print ('Unexpected status: %s response %s' % (response_raw.status_code, response_raw.text))
-            sys.exit(1)
+            self.fetch_done = True
+            return False
         response = json.loads(response_raw.text)
         # Add the requests to our events array
         self.events.extend(response['data'])
@@ -208,6 +213,12 @@ def fetch_token(config):
 
     return auth.json()['token']
 
+def twenty_four():
+    from_time = (datetime.utcnow().replace(second=0, microsecond=0)) - timedelta(hours=24)
+    from_time = calendar.timegm(from_time.utctimetuple())
+    return from_time
+    
+
 def main():
     # Parse the commandline args, load our config, and set our paths
     args        = parse_args()
@@ -242,14 +253,16 @@ def main():
                 from_time = state[state_index]['last_timestamp'] 
             except KeyError:
                 # Only grab the last 24 hours if we haven't ran before, this is limited by the API
-                from_time = (datetime.utcnow().replace(second=0, microsecond=0)) - timedelta(hours=24)
-                from_time = calendar.timegm(from_time.utctimetuple())
+                from_time = twenty_four()
                 state[state_index] = {'last_timestamp': 0}
+            
+            if from_time < twenty_four():
+                from_time = twenty_four()
 
             log.set_from_time(from_time)
             # Fetch the events
             log.get_events()
-            if args.verbose: print("Wrote " + str(log.log_count) + " logs from site %{site} of type " + log.__class__.__name__)
+            if args.verbose: print("Wrote " + str(log.log_count) + " logs from site " + site + " of type " + log.__class__.__name__)
             # Update our last recorded timestamp
             state[state_index]['last_timestamp'] = log.update_from_time()
 
