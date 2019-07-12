@@ -100,7 +100,7 @@ class RequestLog(BaseLog):
         if not self.url:
             self.url = self.api_host + ('/api/v0/corps/%s/sites/%s/feed/requests?from=%s&until=%s' % (self.corp_name, self.site, self.from_time, self.until_time))
 
-        print ('Fetching requests from URL: \'' + self.url +'\'')
+        # print ('Fetching requests from URL: \'' + self.url +'\'')
         response_raw = requests.get(self.url, headers=self.headers)
         if response_raw.status_code != 200:
             print ('Unexpected status: %s response %s' % (response_raw.status_code, response_raw.text))
