@@ -34,7 +34,7 @@ class BaseLog(object):
 
         # Set up our logger
         log_file   = os.path.join(log_path, self.__class__.__name__) + '-' + config['site'] + '.log'
-        logger     = logging.getLogger(self.__class__.__name__)
+        logger     = logging.getLogger(self.__class__.__name__ + '-' + config['site'])
         formatter  = logging.Formatter('%(message)s')
         loghandler = TimedRotatingFileHandler(log_file, 
                                               encoding='utf-8',
