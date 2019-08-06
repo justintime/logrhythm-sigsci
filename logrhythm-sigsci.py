@@ -121,7 +121,7 @@ class RequestLog(BaseLog):
 
     def write_logs(self):
         fmtstr = (
-            '%(timestamp)s,'
+            '%(epochtimestamp)s,'
             'serverHostname="%(serverHostname)s",'
             'remoteIP="%(remoteIP)s",'
             'remoteHostname="%(remoteHostname)s",'
@@ -151,6 +151,8 @@ class RequestLog(BaseLog):
                 tags.append(tag['type'])
             
             event['tags'] = ','.join(tags)
+            utc_time = datetime.strptime(event['timestamp'],"%Y-%m-%dT%H:%M:%SZ")
+            event['epochtimestamp'] = calendar.timegm(utc_time.utctimetuple())
             # Write our event to the log
             self.logger.info(fmtstr % event)
             self.log_count += 1
