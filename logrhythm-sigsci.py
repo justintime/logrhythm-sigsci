@@ -19,6 +19,8 @@ class BaseLog(object):
         self.config    = config
         self.events    = deque()
         self.url       = False
+        self.max_epoch = 0
+        self.verbose   = config['verbose']
         self.token     = config['token']
         self.corp_name = config['corp_name']
         self.site      = config['site']
@@ -60,7 +62,9 @@ class BaseLog(object):
             # SigSci paginates by 1,000 requests.  If there's a next uri parameter, keep fetching that until we're done
             self.fetch_done = False
             while not self.fetch_done:
+                if self.verbose: print("Fetching next 1,000 logs")
                 self.fetch_events()
+                if self.verbose: print("Writing last 1,000 logs")
                 self.write_logs()
 
         except RuntimeError as e:
@@ -77,18 +81,6 @@ class BaseLog(object):
 
     def set_from_time(self,new_from_time):
         self.from_time = new_from_time
-
-    def update_from_time(self):
-        """
-            Determine the from_time based on the timestamp of the last event.
-            To avoid duplicate logs, we set the from time to the next minute and zero seconds
-        """
-        if self.last_event:
-            last_timestamp = self.last_event['timestamp'] 
-            from_time = (datetime.strptime(last_timestamp[:-1],"%Y-%m-%dT%H:%M:%S").replace(second=0, microsecond=0)) + timedelta(minutes=1)
-            self.from_time = calendar.timegm(from_time.utctimetuple())
-
-        return self.from_time
 
 class RequestLog(BaseLog):
     def __init__(self, config, site):
@@ -153,11 +145,11 @@ class RequestLog(BaseLog):
             event['tags'] = ','.join(tags)
             utc_time = datetime.strptime(event['timestamp'],"%Y-%m-%dT%H:%M:%SZ")
             event['epochtimestamp'] = calendar.timegm(utc_time.utctimetuple())
+            if event['epochtimestamp'] > self.max_epoch:
+                self.max_epoch = event['epochtimestamp']
             # Write our event to the log
             self.logger.info(fmtstr % event)
             self.log_count += 1
-        # Save our last event so we can convert the timestamp
-        self.last_event = event
 
 def load_config(config_path):
     """
@@ -236,6 +228,10 @@ def main():
 
     # This is our config
     config = load_config(config_path)
+    if args.verbose: 
+        config['verbose'] = True
+    else:
+        config['verbose'] = False
 
     # Get our auth token
     token = fetch_token(config)
@@ -266,7 +262,8 @@ def main():
             log.get_events()
             if args.verbose: print("Wrote " + str(log.log_count) + " logs from site " + site + " of type " + log.__class__.__name__)
             # Update our last recorded timestamp
-            state[state_index]['last_timestamp'] = log.update_from_time()
+            if args.verbose: print("Last timestamp in epoch: %s" % log.max_epoch)
+            state[state_index]['last_timestamp'] = log.max_epoch
 
             # Save our state to a json file
             write_state_to_file(state_file, state)
