@@ -180,7 +180,7 @@ def load_state_from_file(statefile):
     try:
         with open(statefile, 'r') as json_file:
             state = json.load(json_file)
-    except IOError:
+    except:
         state = {}
     return state
 
