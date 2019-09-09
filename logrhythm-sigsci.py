@@ -283,8 +283,9 @@ def main():
             if args.verbose: print("Last timestamp in epoch: %s" % log.max_epoch)
             state[state_index]['last_timestamp'] = log.max_epoch
 
-            # Save our state to a json file
-            write_state_to_file(state_file, state)
+            # Save our state to a json file if we have a last log received
+            if log.max_epoch != 0:
+                write_state_to_file(state_file, state)
 
 if __name__ == '__main__':
     main()
