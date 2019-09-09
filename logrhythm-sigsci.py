@@ -21,24 +21,29 @@ class BaseLog(object):
         self.url       = False
         self.max_epoch = 0
         self.verbose   = config['verbose']
-        self.token     = config['token']
         self.corp_name = config['corp_name']
         self.site      = config['site']
         self.api_host  = config['api_host']
         self.log_count = 0
+
+        if 'email' in config:
+            self.email          = config['email']
+        if 'api_token' in config:
+            self.api_token      = config['api_token']
+        if 'session_token' in config:
+            self.session_token  = config['session_token']
 
         # We need to give SigSci 5 minutes to ingest, aggregate, and process
         # https://docs.signalsciences.net/developer/extract-your-data/#example-usage
         until_time = datetime.utcnow().replace(second=0, microsecond=0)
         until_time = until_time - timedelta(minutes=5)
         self.until_time = calendar.timegm(until_time.utctimetuple())
-        
 
         # Set up our logger
         log_file   = os.path.join(log_path, self.__class__.__name__) + '-' + config['site'] + '.log'
         logger     = logging.getLogger(self.__class__.__name__ + '-' + config['site'])
         formatter  = logging.Formatter('%(message)s')
-        loghandler = TimedRotatingFileHandler(log_file, 
+        loghandler = TimedRotatingFileHandler(log_file,
                                               encoding='utf-8',
                                               when='midnight',
                                               interval=1,
@@ -51,11 +56,19 @@ class BaseLog(object):
         self.logger = logger
 
     def get_events(self):
-        # Once we've authenticated, we get a token.  That token needs to be sent in the request headers.
-        self.headers   = {
-            'Content-type': 'application/json',
-            'Authorization': 'Bearer %s' % self.token 
-        }
+        #If we have a self generated token we can use it in the headers
+        if self.api_token:
+            self.headers = {
+                'Content-type': 'application/json',
+                'x-api-user': self.email,
+                'x-api-token': self.api_token
+            }
+        # If we've authenticated using a username & password, we get a session token.  That token needs to be sent in the request headers.
+        else:
+            self.headers   = {
+                'Content-type': 'application/json',
+                'Authorization': 'Bearer %s' % self.session_token
+            }
 
         try:
             # TODO: for memory reasons, we should write out each page to the log, and reset the events array with each page
@@ -136,12 +149,12 @@ class RequestLog(BaseLog):
                 event = self.events.popleft()
             except IndexError:
                 break
-                    
+
             # Grab our tag names and add them to an array
             tags = []
             for tag in event['tags']:
                 tags.append(tag['type'])
-            
+
             event['tags'] = ','.join(tags)
             utc_time = datetime.strptime(event['timestamp'],"%Y-%m-%dT%H:%M:%SZ")
             event['epochtimestamp'] = calendar.timegm(utc_time.utctimetuple())
@@ -192,7 +205,7 @@ def write_state_to_file(statefile,state):
         print("Unable to write to " + statefile + ", exiting.")
         sys.exit(1)
 
-def fetch_token(config):
+def fetch_session_token(config):
     auth = requests.post(
         config['api_host'] + '/api/v0/auth',
         data = {"email": config['email'], "password": config['password']}
@@ -211,7 +224,7 @@ def twenty_four():
     from_time = (datetime.utcnow().replace(second=0, microsecond=0)) - timedelta(hours=24)
     from_time = calendar.timegm(from_time.utctimetuple())
     return from_time
-    
+
 
 def main():
     # Parse the commandline args, load our config, and set our paths
@@ -228,15 +241,15 @@ def main():
 
     # This is our config
     config = load_config(config_path)
-    if args.verbose: 
+    if args.verbose:
         config['verbose'] = True
     else:
         config['verbose'] = False
 
-    # Get our auth token
-    token = fetch_token(config)
-    
-    config['token'] = token
+    # Get our auth token if necessary
+    if 'api_token' not in config:
+        session_token = fetch_session_token(config)
+        config['session_token'] = session_token
 
     for logclass in (RequestLog,): # Support for future other logtypes
         for site in config['site_names']:
@@ -248,12 +261,17 @@ def main():
             # Load our previous state, creating the default if it doesn't exist
             state_index = log.__class__.__name__ + "-" + site
             try:
-                from_time = state[state_index]['last_timestamp'] 
+                from_time = state[state_index]['last_timestamp']
+
+                # The SigSci API requires 'from' and until epochs to be even minutes.
+                # We bump up the from time to the next minute.
+                if from_time % 60 != 0:
+                    from_time += (60 - (from_time % 60))
             except KeyError:
                 # Only grab the last 24 hours if we haven't ran before, this is limited by the API
                 from_time = twenty_four()
                 state[state_index] = {'last_timestamp': 0}
-            
+
             if from_time < twenty_four():
                 from_time = twenty_four()
 
@@ -265,8 +283,9 @@ def main():
             if args.verbose: print("Last timestamp in epoch: %s" % log.max_epoch)
             state[state_index]['last_timestamp'] = log.max_epoch
 
-            # Save our state to a json file
-            write_state_to_file(state_file, state)
+            # Save our state to a json file if we have a last log received
+            if log.max_epoch != 0:
+                write_state_to_file(state_file, state)
 
 if __name__ == '__main__':
     main()
