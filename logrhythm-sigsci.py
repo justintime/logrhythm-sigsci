@@ -57,7 +57,7 @@ class BaseLog(object):
 
     def get_events(self):
         #If we have a self generated token we can use it in the headers
-        if self.api_token:
+        if hasattr(self, 'api_token'):
             self.headers = {
                 'Content-type': 'application/json',
                 'x-api-user': self.email,
